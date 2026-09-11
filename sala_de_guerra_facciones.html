@@ -276,7 +276,7 @@ tbody tr:hover{background:var(--bg-panel2);}
     </div>
   </div>
 
-  <div class="footer">Los archivos datos1.csv, datos2.csv... deben estar en la misma carpeta que este HTML</div>
+  <div class="footer">Cada semana necesita 3 archivos con el mismo n&uacute;mero: datosN.csv (medallas), sublevadosN.csv y democratasN.csv (listas de nombres) &mdash; todos en la misma carpeta que este HTML</div>
 </div>
 
 <script>
@@ -338,39 +338,89 @@ function parseCsvToData(csvText){
   })).filter(d => d.name).map(d => ({...d, group: classify(d.name)}));
 }
 
+function parseNameList(text){
+  const parsed = Papa.parse(text, { header:false, skipEmptyLines:true });
+  return parsed.data
+    .map(row => (row[0] || '').trim())
+    .filter(name => name && name.toLowerCase() !== 'nombre' && name.toLowerCase() !== 'citizen name');
+}
+
+async function fetchNameSet(file){
+  try{
+    const res = await fetch(file, {cache:'no-store'});
+    if(!res.ok) return { set: new Set(), found: false };
+    const text = await res.text();
+    const names = parseNameList(text);
+    return { set: new Set(names.map(n => n.toLowerCase())), found: true };
+  }catch(err){
+    return { set: new Set(), found: false };
+  }
+}
+
 async function loadDataset(file){
   const statusEl = document.getElementById('datasetStatus');
   statusEl.textContent = 'Cargando ' + file + '...';
   statusEl.classList.remove('error');
+
+  const weekNum = (file.match(/(\d+)/) || [,'1'])[1];
+  const sublevadosFile = 'sublevados' + weekNum + '.csv';
+  const democratasFile = 'democratas' + weekNum + '.csv';
+
   try{
     const res = await fetch(file, {cache:'no-store'});
-    if(!res.ok) throw new Error('HTTP ' + res.status);
+    if(!res.ok) throw new Error('HTTP ' + res.status + ' al pedir ' + file);
     const text = await res.text();
+
+    const [subResult, demResult] = await Promise.all([
+      fetchNameSet(sublevadosFile),
+      fetchNameSet(democratasFile)
+    ]);
+    SUBLEVADOS_SET = subResult.set;
+    DEMOCRATAS_SET = demResult.set;
+
     DATA = parseCsvToData(text);
-    statusEl.textContent = file + ' \u2014 ' + DATA.length + ' jugadores cargados';
+
+    let statusMsg = file + ' \u2014 ' + DATA.length + ' jugadores';
+    const missing = [];
+    if(!subResult.found) missing.push(sublevadosFile);
+    if(!demResult.found) missing.push(democratasFile);
+    if(missing.length){
+      statusMsg += ' (sin ' + missing.join(' ni ') + ', todos quedan como neutrales)';
+      statusEl.classList.add('error');
+    }
+    statusEl.textContent = statusMsg;
+
     currentFaction = 'todos';
     document.querySelectorAll('.faction-btn[data-f]').forEach(b=>b.classList.toggle('active', b.dataset.f==='todos'));
     refresh();
     renderFactionMedalsChart();
   }catch(err){
     DATA = [];
-    statusEl.textContent = 'No se pudo cargar ' + file + ' (\u00bfest\u00e1 en la misma carpeta que el HTML?)';
+    statusEl.textContent = 'Error cargando ' + file + ': ' + err.message;
     statusEl.classList.add('error');
     refresh();
     renderFactionMedalsChart();
   }
 }
 
+
 async function detectAvailableDatasets(){
   const select = document.getElementById('datasetSelect');
+  const statusEl = document.getElementById('datasetStatus');
   const found = [];
   for(const file of CANDIDATE_FILES){
     try{
-      const res = await fetch(file, {method:'HEAD', cache:'no-store'});
+      const res = await fetch(file, {cache:'no-store'});
       if(res.ok) found.push(file);
-    }catch(e){ /* ignore */ }
+    }catch(e){ /* ignore, se prueba el siguiente */ }
   }
-  if(found.length === 0) found.push('datos1.csv'); // siempre ofrecer al menos la opcion por defecto
+  if(found.length === 0){
+    select.innerHTML = '<option value="datos1.csv">Semana 1 (datos1.csv)</option>';
+    statusEl.textContent = 'No se encontr\u00f3 ning\u00fan datosN.csv en esta carpeta';
+    statusEl.classList.add('error');
+    select.addEventListener('change', () => loadDataset(select.value));
+    return;
+  }
   select.innerHTML = found.map((f,i) => `<option value="${f}">Semana ${i+1} (${f})</option>`).join('');
   select.addEventListener('change', () => loadDataset(select.value));
   loadDataset(found[0]);
@@ -551,3 +601,5 @@ detectAvailableDatasets();
 </script>
 </body>
 </html>
+
+  
